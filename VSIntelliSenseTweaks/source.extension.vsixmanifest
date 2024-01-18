@@ -1,11 +1,12 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011" xmlns:d="http://schemas.microsoft.com/developer/vsx-schema-design/2011">
     <Metadata>
-        <Identity Id="VSIntelliSenseTweaks.91be3b0f-9921-411a-a154-a6e067dda3fc" Version="1.5.5" Language="en-US" Publisher="Carl Foghammar Nömtak" />
+        <Identity Id="VSIntelliSenseTweaks.91be3b0f-9921-411a-a154-a6e067dda3fc" Version="1.5.10" Language="en-US" Publisher="Carl Foghammar Nömtak" />
         <DisplayName>IntelliSense Tweaks</DisplayName>
         <Description xml:space="preserve">Makes completion filtering more fuzzy and adds multi selection intelliSense.</Description>
         <MoreInfo>https://github.com/cfognom/VSIntelliSenseTweaks</MoreInfo>
         <License>LICENSE.txt</License>
+        <ReleaseNotes>Added local, fields, properties and methods ranking boost.</ReleaseNotes>
         <Icon>logo.png</Icon>
         <Tags>IntelliSense, Tweak, Tweaks, Completion, Completions, Suggestion, Suggestions, Filter, Filtering, Sorting, Multi caret, Multi selection, Productivity, Fuzzy</Tags>
         <Preview>true</Preview>

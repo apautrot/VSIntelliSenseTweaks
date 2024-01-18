@@ -1,6 +1,6 @@
-﻿#if DEBUG
+﻿// #if DEBUG
 #define MEASURE_TIME
-#endif
+// #endif
 
 using System;
 using System.Text;
@@ -28,10 +28,10 @@ namespace VSIntelliSenseTweaks.Utilities
             }
             builder.Append("'");
             builder.Append(name);
-            builder.Append("' ms: ");
+			builder.Append ( ' ' );
             insertPos = builder.Length;
             backupLength = builder.Length;
-            builder.AppendLine();
+			builder.AppendLine ( " ms" );
             for (int i = 0; i < depth; i++)
             {
                 builder.Append("|   ");
@@ -45,7 +45,7 @@ namespace VSIntelliSenseTweaks.Utilities
         public void Dispose()
         {
 #if MEASURE_TIME
-            var ms = watch.ElapsedMilliseconds;
+            var ms = (double)watch.ElapsedTicks * 1000 / Stopwatch.Frequency;
             depth--;
             if (backupLength >= 0)
             {
@@ -61,7 +61,7 @@ namespace VSIntelliSenseTweaks.Utilities
                 }
                 builder.Append("}");
             }
-            builder.Insert(insertPos, ms.ToString());
+            builder.Insert(insertPos, ms.ToString("0.00"));
 
             if (depth == 0)
             {

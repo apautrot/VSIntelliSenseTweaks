@@ -33,6 +33,8 @@ using VSIntelliSenseTweaks.Utilities;
 
 using RoslynCompletionItem = Microsoft.CodeAnalysis.Completion.CompletionItem;
 using VSCompletionItem = Microsoft.VisualStudio.Language.Intellisense.AsyncCompletion.Data.CompletionItem;
+using Microsoft.CodeAnalysis;
+using System.Runtime.CompilerServices;
 
 namespace VSIntelliSenseTweaks
 {
@@ -121,7 +123,7 @@ namespace VSIntelliSenseTweaks
                 var initialCompletions = initialData.InitialItemList;
                 this.n_completions = initialCompletions.Count;
 
-                Debug.WriteLine($"Allocating for {n_completions} completions");
+                // Debug.WriteLine($"Allocating for {n_completions} completions");
 
                 this.completions = new VSCompletionItem[n_completions];
                 this.keys = new CompletionItemKey[n_completions];
@@ -144,11 +146,122 @@ namespace VSIntelliSenseTweaks
             }
         }
 
-        public FilteredCompletionModel UpdateCompletionList()
+		static unsafe int FastUnsafeParse ( ReadOnlySpan<char> number )
+		{
+			fixed ( char * startPtr = number )
+			{
+				var length = number.Length;
+				char* ptr = startPtr;
+				if ( length == 1 )
+				{
+					return *ptr - '0';
+				}
+				else if ( length == 2 )
+				{
+					int result = (*ptr - '0') * 10;
+					ptr++;
+					result += *ptr - '0';
+					return result;
+				}
+			}
+
+			throw new ArgumentException ( "Invalid input" );
+		}
+
+		static readonly Dictionary<string, SymbolKind> completionItemSymbolKindCache = new Dictionary<string, SymbolKind>();
+
+		[MethodImpl ( MethodImplOptions.AggressiveInlining )]
+		static bool TryGetCompletionSymbolKind ( VSCompletionItem completion, out SymbolKind kind )
+		{
+			if ( completionItemSymbolKindCache.TryGetValue ( completion.FilterText, out kind ) )
+				return true;
+
+			if ( completion.Properties.TryGetProperty ( "RoslynCompletionItemData", out object roslynObject ) )
+			{
+				var roslynCompletion = GetRoslynItemProperty(roslynObject);
+				if ( roslynCompletion.Properties.TryGetValue ( "SymbolKind", out var value ) )
+				{
+					kind = (SymbolKind)FastUnsafeParse ( value.AsSpan () );
+					completionItemSymbolKindCache.Add ( completion.FilterText, kind );
+					// Debug.WriteLine ( $"Adding {completion.DisplayText}" );
+					return true;
+				}
+			}
+
+			kind = SymbolKind.Alias;
+			return false;
+		}
+
+		public enum StartsWithResult
+		{
+			ExactMatch,
+			IgnoreCaseMatch,
+			NoMatch
+		}
+
+		/*
+		[MethodImpl(MethodImplOptions.AggressiveInlining)]
+		public static StartsWithResult StartsWithSlow ( ReadOnlySpan<char> number, ReadOnlySpan<char> sub )
+		{
+			if ( sub.Length > number.Length )
+				return StartsWithResult.NoMatch;
+
+			if ( number.StartsWith ( sub ) )
+				return StartsWithResult.ExactMatch;
+
+			if ( number.StartsWith ( sub, StringComparison.OrdinalIgnoreCase ) )
+				return StartsWithResult.IgnoreCaseMatch;
+
+			return StartsWithResult.NoMatch;
+		}
+		*/
+
+		[MethodImpl ( MethodImplOptions.AggressiveInlining )]
+		public static StartsWithResult StartsWith ( ReadOnlySpan<char> word, ReadOnlySpan<char> sub )
+		{
+			unsafe
+			{
+				var subLength = sub.Length;
+			
+				if ( subLength > word.Length )
+					return StartsWithResult.NoMatch;
+
+				var caseMatching = true;
+			
+				fixed ( char* fixedWord = word )
+				fixed ( char* fixedSub = sub )
+				{
+					var wordPtr = fixedWord;
+					var subPtr = fixedSub;
+					for ( int i = 0; i < subLength; i++ )
+					{
+						var comp = *wordPtr - * subPtr;
+						wordPtr++;
+						subPtr++;
+
+						switch ( comp )
+						{
+							case 32:
+							case -32:
+								caseMatching = false;
+								continue;
+							case 0:
+								continue;
+						}
+
+						return StartsWithResult.NoMatch;
+					}
+				}
+
+				return caseMatching ? StartsWithResult.ExactMatch : StartsWithResult.IgnoreCaseMatch;
+			}
+		}
+
+		public FilteredCompletionModel UpdateCompletionList()
         {
             using (new Measurement(nameof(UpdateCompletionList)))
-            {
-                var textFilter = session.ApplicableToSpan.GetText(currentData.Snapshot);
+			{
+				var textFilter = session.ApplicableToSpan.GetText(currentData.Snapshot);
                 bool hasTextFilter = textFilter.Length > 0;
 
                 if (ShouldDismiss()) return null;
@@ -163,7 +276,7 @@ namespace VSIntelliSenseTweaks
 
                 int n_eligibleCompletions = 0;
                 using (new Measurement(nameof(DetermineEligibleCompletions)))
-                DetermineEligibleCompletions();
+					DetermineEligibleCompletions();
 
                 var highlighted = CreateHighlightedCompletions(n_eligibleCompletions);
                 var selectionKind = GetSelectionKind(n_eligibleCompletions, hasTextFilter);
@@ -191,7 +304,7 @@ namespace VSIntelliSenseTweaks
                         && position > 0 && currentData.Snapshot[position - 1] != '.';
                 }
 
-                void DetermineEligibleCompletions()
+				void DetermineEligibleCompletions()
                 {
                     var initialCompletions = currentData.InitialSortedItemList;
                     var defaults = currentData.Defaults;
@@ -200,6 +313,7 @@ namespace VSIntelliSenseTweaks
                     int patternLength = Math.Min(textFilter.Length, textFilterMaxLength);
                     var pattern = textFilter.AsSpan(0, patternLength);
 
+					
                     ReadOnlySpan<char> roslynPreselectedItemFilterText = null;
                     BitField64 availableFilters = default;
                     for (int i = 0; i < n_completions; i++)
@@ -211,9 +325,50 @@ namespace VSIntelliSenseTweaks
                         if (hasTextFilter)
                         {
                             var word = completion.FilterText.AsSpan();
-                            int displayTextOffset = Math.Max(0, completion.DisplayText.AsSpan().IndexOf(word));
-                            patternScore = scorer.ScoreWord(word, pattern, displayTextOffset, out matchedSpans);
-                            if (patternScore == int.MinValue) continue;
+							var textAsSpan = textFilter.AsSpan();
+							var comp = StartsWith ( word, textAsSpan );
+							if ( comp != StartsWithResult.NoMatch )
+							{
+								patternScore = 1000;
+								matchedSpans = noSpans;
+
+								if ( comp == StartsWithResult.ExactMatch )
+									patternScore += 200;
+
+								if ( word.Length == textAsSpan.Length )
+								{
+									patternScore += 1000;
+								}
+								else
+								{
+									patternScore -= word.Length;
+									if ( TryGetCompletionSymbolKind ( completion, out var symbolKind ) )
+									{
+										switch ( symbolKind )
+										{
+											case SymbolKind.Local:
+												patternScore += 600;
+												break;
+											case SymbolKind.Parameter:
+												patternScore += 500;
+												break;
+											case SymbolKind.Field:
+											case SymbolKind.Property:
+												patternScore += 400;
+												break;
+											case SymbolKind.Method:
+												patternScore += 200;
+												break;
+										}
+									}
+								}
+							}
+							else
+							{
+								int displayTextOffset = Math.Max(0, completion.DisplayText.AsSpan().IndexOf(word));
+								patternScore = scorer.ScoreWord(word, pattern, displayTextOffset, out matchedSpans);
+								if (patternScore == int.MinValue) continue;
+							}
                         }
                         else
                         {
@@ -246,7 +401,7 @@ namespace VSIntelliSenseTweaks
 
                         patternScore += CalculateRoslynScoreBonus(roslynScore, pattern.Length);
 
-                        var key = new CompletionItemKey
+						var key = new CompletionItemKey
                         {
                             patternScore = patternScore,
                             defaultIndex = defaultIndex,
@@ -265,12 +420,12 @@ namespace VSIntelliSenseTweaks
                         n_eligibleCompletions++;
                     }
 
-                    using (new Measurement("Sort"))
-                    Array.Sort(keys, completions, 0, n_eligibleCompletions);
-
-                    filterStates = UpdateFilterStates(filterStates, availableFilters);
+					using (new Measurement("Sort"))
+						Array.Sort(keys, completions, 0, n_eligibleCompletions);
+					
+					filterStates = UpdateFilterStates(filterStates, availableFilters);
                 }
-            }
+			}
         }
 
         UpdateSelectionHint GetSelectionKind(int n_eligibleCompletions, bool hasTextFilter)
@@ -375,9 +530,9 @@ namespace VSIntelliSenseTweaks
         // we have to use reflection or expressions to access it.
         private static Func<object, RoslynCompletionItem> RoslynCompletionItemGetter = null;
 
-        private RoslynCompletionItem GetRoslynItemProperty(object roslynObject)
+        private static RoslynCompletionItem GetRoslynItemProperty(object roslynObject)
         {
-            if (RoslynCompletionItemGetter == null)
+			if (RoslynCompletionItemGetter == null)
             {
                 // Microsoft.CodeAnalysis.Editor.Implementation.IntelliSense.AsyncCompletion.CompletionItemData
                 var roslynType = roslynObject.GetType();
